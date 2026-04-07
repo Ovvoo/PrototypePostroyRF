@@ -13,7 +13,8 @@ from aiogram.types import (
     InlineKeyboardButton,
 )
 
-BOT_TOKEN = "8549282274:AAG8RCTHC2OYSljR_K45qW5MhtyRfEop98I"
+import os
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8700278738:AAEg_a89GXfph7ns9XqvinVd1wGSdsRg3og")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
