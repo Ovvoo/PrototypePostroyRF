@@ -1,24 +1,21 @@
 import asyncio
 import logging
+import os
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.types import (
-    ReplyKeyboardMarkup, 
-    KeyboardButton, 
-    InlineKeyboardMarkup, 
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
 
-import os
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8700278738:AAEg_a89GXfph7ns9XqvinVd1wGSdsRg3og")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher()
 
 # --- ДАННЫЕ ДЛЯ ПРОТОТИПА ---
 CITIES = ["Москва", "Санкт-Петербург", "Казань", "Екатеринбург", "Краснодар", "Новосибирск"]
@@ -29,18 +26,6 @@ CATEGORIES = [
     "🛠 Мастер на час", "🚪 Окна и двери", "❄️ Кондиционеры", "🎨 Дизайн"
 ]
 CATEGORIES_PER_PAGE = 4
-
-class SearchStates(StatesGroup):
-    city = State()
-    category = State()
-class TaskStates(StatesGroup):
-    city = State()
-    category = State()
-    description = State()
-    payment_method = State()
-    contact_method = State()
-    budget_deadline = State()
-    confirmation = State()
 
 # --- КЛАВИАТУРЫ (Reply) ---
 role_keyboard = ReplyKeyboardMarkup(
@@ -69,33 +54,32 @@ def get_cities_kb(prefix: str, include_all: bool = False):
     builder = InlineKeyboardBuilder()
     for i, city in enumerate(CITIES):
         builder.button(text=f"📍 {city}", callback_data=f"{prefix}{i}")
-    builder.adjust(2) # По 2 города в ряд
-    
+    builder.adjust(2)
+
     if include_all:
         builder.row(InlineKeyboardButton(text="🌍 Все города", callback_data=f"{prefix}all"))
     builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_task"))
     return builder.as_markup()
 
-def get_categories_kb(page: int = 0):
+def get_categories_kb(prefix: str = "cat_select_", page: int = 0):
     builder = InlineKeyboardBuilder()
     start = page * CATEGORIES_PER_PAGE
     end = start + CATEGORIES_PER_PAGE
-    
-    # Добавляем категории для текущей страницы
+
     for i, cat in enumerate(CATEGORIES[start:end]):
         real_index = start + i
-        builder.row(InlineKeyboardButton(text=cat, callback_data=f"cat_select_{real_index}"))
-    
-    # Кнопки пагинации
+        builder.row(InlineKeyboardButton(text=cat, callback_data=f"{prefix}{real_index}"))
+
     nav_buttons = []
+    page_prefix = "tcat_page_" if prefix == "tcat_select_" else "scat_page_"
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cat_page_{page-1}"))
+        nav_buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{page_prefix}{page-1}"))
     if end < len(CATEGORIES):
-        nav_buttons.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"cat_page_{page+1}"))
-    
+        nav_buttons.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"{page_prefix}{page+1}"))
+
     if nav_buttons:
         builder.row(*nav_buttons)
-        
+
     builder.row(InlineKeyboardButton(text="Отменить ❌", callback_data="cancel_task"))
     return builder.as_markup()
 
@@ -167,14 +151,14 @@ profile_inline_kb = InlineKeyboardMarkup(
 
 # --- ХЭНДЛЕРЫ БАЗОВЫЕ ---
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer(f"""
-Удобная платформа для размещения задач и поиска исполнителей в сфере строительства и ремонта. 
-
-Пожалуйста, выберите свою роль для начала работы
-В любой момент вы сможете изменить её в настройках профиля ⚙️
-                             """, reply_markup=role_keyboard)
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "Удобная платформа для размещения задач и поиска исполнителей "
+        "в сфере строительства и ремонта.\n\n"
+        "Пожалуйста, выберите свою роль для начала работы\n"
+        "В любой момент вы сможете изменить её в настройках профиля ⚙️",
+        reply_markup=role_keyboard
+    )
 
 @dp.message(F.text == "Я исполнитель")
 async def role_exec(message: types.Message):
@@ -204,141 +188,124 @@ async def switch_role(callback: types.CallbackQuery):
     await callback.answer()
 
 @dp.callback_query(F.data == "cancel_task")
-async def cancel_creation(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
+async def cancel_creation(callback: types.CallbackQuery):
     try:
         await callback.message.delete()
-    except:
+    except Exception:
         pass
     await callback.message.answer("Действие отменено.", reply_markup=main_customer_keyboard)
     await callback.answer()
 
-# --- ХЭНДЛЕРЫ: СОЗДАНИЕ ЗАДАЧИ (ЗАКАЗЧИК) ---
+# --- СОЗДАНИЕ ЗАДАЧИ (ЗАКАЗЧИК) — stateless ---
 @dp.message(F.text == "Создать задачу")
-async def start_task_creation(message: types.Message, state: FSMContext):
-    await state.set_state(TaskStates.city)
-    await message.answer("📍 **Шаг 1:** Выберите город, в котором нужно выполнить задачу:", 
-                         reply_markup=get_cities_kb("task_city_"))
+async def start_task_creation(message: types.Message):
+    await message.answer(
+        "📍 **Шаг 1:** Выберите город, в котором нужно выполнить задачу:",
+        reply_markup=get_cities_kb("task_city_"),
+        parse_mode="Markdown"
+    )
 
-@dp.callback_query(TaskStates.city, F.data.startswith("task_city_"))
-async def process_task_city(callback: types.CallbackQuery, state: FSMContext):
-    city_idx = int(callback.data.split("_")[2])
+@dp.callback_query(F.data.startswith("task_city_"))
+async def process_task_city(callback: types.CallbackQuery):
+    city_idx = int(callback.data.replace("task_city_", ""))
     selected_city = CITIES[city_idx]
-    await state.update_data(city=selected_city)
-    
-    await state.set_state(TaskStates.category)
-    await callback.message.edit_text(f"Город: **{selected_city}**\n\n"
-                                     "🗂 **Шаг 2:** Выберите категорию будущей задачи:\n"
-                                     "*(Используйте кнопки Вперед/Назад для просмотра всех)*", 
-                                     reply_markup=get_categories_kb(page=0), parse_mode="Markdown")
-    await callback.answer()
 
-@dp.callback_query(SearchStates.category, F.data.startswith("cat_page_"))
-async def paginate_search_categories(callback: types.CallbackQuery, state: FSMContext):
-    page = int(callback.data.split("_")[2])
-    data = await state.get_data()
-    city_name = data.get("search_city", "Не указан")
     await callback.message.edit_text(
-        f"📍 Город: **{city_name}**\n\n"
-        "🗂 **Выберите категорию задачи:**\n"
+        f"Город: **{selected_city}**\n\n"
+        "🗂 **Шаг 2:** Выберите категорию будущей задачи:\n"
         "*(Используйте кнопки Вперед/Назад для просмотра всех)*",
-        reply_markup=get_categories_kb(page=page),
+        reply_markup=get_categories_kb(prefix="tcat_select_", page=0),
         parse_mode="Markdown"
     )
     await callback.answer()
 
+@dp.callback_query(F.data.startswith("tcat_page_"))
+async def paginate_task_categories(callback: types.CallbackQuery):
+    page = int(callback.data.replace("tcat_page_", ""))
+    await callback.message.edit_reply_markup(
+        reply_markup=get_categories_kb(prefix="tcat_select_", page=page)
+    )
+    await callback.answer()
 
-@dp.callback_query(SearchStates.category, F.data.startswith("cat_select_"))
-async def process_search_category(callback: types.CallbackQuery, state: FSMContext):
-    cat_idx = int(callback.data.split("_")[2])
+@dp.callback_query(F.data.startswith("tcat_select_"))
+async def process_task_category(callback: types.CallbackQuery):
+    cat_idx = int(callback.data.replace("tcat_select_", ""))
     selected_category = CATEGORIES[cat_idx]
-    data = await state.get_data()
-    city_name = data.get("search_city", "Не указан")
-    
-    # Формируем демонстрационную задачу с учётом выбранных параметров
-    caption = (
-        f"🏗 **{selected_category}**\n\n"
-        f"**Описание:** Нужно выполнить работы по {selected_category.lower()}. "
-        f"Подробности уточняйте.\n"
-        f"📍 **Адрес:** {city_name}, центральный район\n"
-        f"💰 **Бюджет:** договорная"
-    )
-    # Для реалистичности можно менять фото в зависимости от категории (здесь одно для примера)
-    photo_url = "https://eurobeton72.ru/upload/iblock/0a5/o2gxw2n35p33h35xr9tfkfrtlzzi4ity.jpg"
-    
-    await callback.message.delete()
-    await callback.message.answer_photo(
-        photo=photo_url, 
-        caption=caption, 
-        reply_markup=task_card_inline_kb, 
+
+    await callback.message.edit_text(
+        f"🗂 Категория: **{selected_category}**\n\n"
+        "📝 **Шаг 3:** Напишите описание задачи текстом в чат.\n"
+        "*(В прототипе — нажмите кнопку ниже для демо)*",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📝 Демо: пропустить описание", callback_data="demo_skip_desc")],
+            [InlineKeyboardButton(text="Отменить ❌", callback_data="cancel_task")]
+        ]),
         parse_mode="Markdown"
     )
-    await state.clear()
-    await callback.answer(f"Поиск по: {city_name} / {selected_category}")
-
-@dp.message(TaskStates.description)
-async def process_description(message: types.Message, state: FSMContext):
-    photo_id = message.photo[-1].file_id if message.photo else None
-    text_desc = message.caption if message.photo else message.text
-    
-    if not text_desc:
-        await message.answer("Пожалуйста, напишите описание текстом.")
-        return
-
-    await state.update_data(description=text_desc, photo=photo_id)
-    await state.set_state(TaskStates.payment_method)
-    await message.answer("💰 **Шаг 4: Оплата**\nВыберите способ оплаты:", reply_markup=payment_kb, parse_mode="Markdown")
-
-@dp.callback_query(TaskStates.payment_method, F.data.startswith("pay_"))
-async def process_payment(callback: types.CallbackQuery, state: FSMContext):
-    pay_val = "Наличные" if callback.data == "pay_cash" else "Перечисление"
-    await state.update_data(payment=pay_val)
-    await state.set_state(TaskStates.contact_method)
-    await callback.message.edit_text("📞 **Шаг 5: Связь**\nКак исполнителям с вами связаться?", reply_markup=contact_kb, parse_mode="Markdown")
-
-@dp.callback_query(TaskStates.contact_method, F.data.startswith("contact_"))
-async def process_contact(callback: types.CallbackQuery, state: FSMContext):
-    contact_val = "Телефон" if callback.data == "contact_phone" else "MAX / Telegram"
-    await state.update_data(contact=contact_val)
-    await state.set_state(TaskStates.budget_deadline)
-    await callback.message.edit_text("📅 **Шаг 6: Бюджет и сроки**\nНапишите желаемую цену и когда нужно закончить работу:", parse_mode="Markdown")
-
-@dp.message(TaskStates.budget_deadline)
-async def process_budget(message: types.Message, state: FSMContext):
-    await state.update_data(budget_deadline=message.text)
-    data = await state.get_data()
-    
-    preview = (
-        f"📋 **ПРЕВЬЮ ВАШЕЙ ЗАДАЧИ**\n\n"
-        f"📍 **Город:** {data['city']}\n"
-        f"🗂 **Категория:** {data['category']}\n"
-        f"📝 **Описание:** {data['description']}\n"
-        f"💳 **Оплата:** {data['payment']}\n"
-        f"📞 **Связь:** {data['contact']}\n"
-        f"💰 **Бюджет/Срок:** {data['budget_deadline']}"
-    )
-    
-    await state.set_state(TaskStates.confirmation)
-    if data.get('photo'):
-        await message.answer_photo(photo=data['photo'], caption=preview, reply_markup=confirm_kb, parse_mode="Markdown")
-    else:
-        await message.answer(preview, reply_markup=confirm_kb, parse_mode="Markdown")
-
-@dp.callback_query(TaskStates.confirmation, F.data == "confirm_publish")
-async def publish_done(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("🚀 Задача успешно опубликована и доступна исполнителям!", reply_markup=main_customer_keyboard)
-    await state.clear()
     await callback.answer()
 
-# --- ХЭНДЛЕРЫ: МОИ ЗАДАЧИ ---
+@dp.callback_query(F.data == "demo_skip_desc")
+async def demo_skip_description(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "💰 **Шаг 4: Оплата**\nВыберите способ оплаты:",
+        reply_markup=payment_kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("pay_"))
+async def process_payment(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "📞 **Шаг 5: Связь**\nКак исполнителям с вами связаться?",
+        reply_markup=contact_kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("contact_"))
+async def process_contact(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "📋 **ПРЕВЬЮ ВАШЕЙ ЗАДАЧИ**\n\n"
+        "📍 **Город:** Москва\n"
+        "🗂 **Категория:** 🏗 Строительство\n"
+        "📝 **Описание:** Демо-задача\n"
+        "💳 **Оплата:** Наличные\n"
+        "📞 **Связь:** Telegram\n"
+        "💰 **Бюджет/Срок:** Договорная",
+        reply_markup=confirm_kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "confirm_publish")
+async def publish_done(callback: types.CallbackQuery):
+    await callback.message.answer(
+        "🚀 Задача успешно опубликована и доступна исполнителям!",
+        reply_markup=main_customer_keyboard
+    )
+    await callback.answer()
+
+# --- МОИ ЗАДАЧИ ---
 @dp.message(F.text == "Мои задачи")
 async def my_tasks(message: types.Message):
     await message.answer("Ваши активные задачи. Нажмите для просмотра откликов:", reply_markup=choose_task_keyboard)
 
 @dp.callback_query(F.data == "task_1")
 async def task_responses(callback: types.CallbackQuery):
-    await callback.message.edit_text("👷 **Отклики на «Бетонные работы»**\n\nВыберите исполнителя:", 
-                                     reply_markup=choose_executores_keyboard, parse_mode="Markdown")
+    await callback.message.edit_text(
+        "👷 **Отклики на «Бетонные работы»**\n\nВыберите исполнителя:",
+        reply_markup=choose_executores_keyboard,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "back_to_tasks")
+async def back_to_tasks(callback: types.CallbackQuery):
+    await callback.message.edit_text(
+        "Ваши активные задачи. Нажмите для просмотра откликов:",
+        reply_markup=choose_task_keyboard
+    )
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("executor_view_"))
 async def view_executor(callback: types.CallbackQuery):
@@ -349,44 +316,83 @@ async def view_executor(callback: types.CallbackQuery):
         "💬 *'Опыт 10 лет, своя опалубка.'*"
     )
     await callback.message.edit_text(profile_text, reply_markup=executor_profile_kb, parse_mode="Markdown")
+    await callback.answer()
 
 @dp.callback_query(F.data == "select_confirm")
 async def select_confirm(callback: types.CallbackQuery):
     await callback.answer("Исполнитель назначен!", show_alert=True)
     await callback.message.edit_text("✅ **Исполнитель выбран**\n\nСвяжитесь с Иваном М. для начала работ.", parse_mode="Markdown")
 
-# --- ХЭНДЛЕРЫ: ПОИСК ЗАДАЧ (ИСПОЛНИТЕЛЬ) ---
+# --- ПОИСК ЗАДАЧ (ИСПОЛНИТЕЛЬ) — stateless ---
 @dp.message(F.text == "🔍 Найти задачу")
-async def find_task_start(message: types.Message, state: FSMContext):
-    await state.set_state(SearchStates.city)
-    await message.answer("📍 Выберите город для поиска актуальных задач:", 
-                         reply_markup=get_cities_kb("search_city_", include_all=True))
+async def find_task_start(message: types.Message):
+    await message.answer(
+        "📍 Выберите город для поиска актуальных задач:",
+        reply_markup=get_cities_kb("search_city_", include_all=True)
+    )
 
-@dp.callback_query(SearchStates.city, F.data.startswith("search_city_"))
-async def process_search_city(callback: types.CallbackQuery, state: FSMContext):
-    data_part = callback.data.split("_")[2]
+@dp.callback_query(F.data.startswith("search_city_"))
+async def process_search_city(callback: types.CallbackQuery):
+    data_part = callback.data.replace("search_city_", "")
     if data_part == "all":
         city_name = "Все города"
     else:
         city_name = CITIES[int(data_part)]
-    await state.update_data(search_city=city_name)
-    
-    await state.set_state(SearchStates.category)
+
     await callback.message.edit_text(
         f"📍 Город: **{city_name}**\n\n"
         "🗂 **Выберите категорию задачи:**\n"
         "*(Используйте кнопки Вперед/Назад для просмотра всех)*",
-        reply_markup=get_categories_kb(page=0),
+        reply_markup=get_categories_kb(prefix="scat_select_", page=0),
         parse_mode="Markdown"
     )
     await callback.answer()
-    
-    
+
+@dp.callback_query(F.data.startswith("scat_page_"))
+async def paginate_search_categories(callback: types.CallbackQuery):
+    page = int(callback.data.replace("scat_page_", ""))
+    await callback.message.edit_reply_markup(
+        reply_markup=get_categories_kb(prefix="scat_select_", page=page)
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("scat_select_"))
+async def process_search_category(callback: types.CallbackQuery):
+    cat_idx = int(callback.data.replace("scat_select_", ""))
+    selected_category = CATEGORIES[cat_idx]
+
+    caption = (
+        f"🏗 **{selected_category}**\n\n"
+        f"**Описание:** Нужно выполнить работы по {selected_category.lower()}. "
+        f"Подробности уточняйте.\n"
+        f"📍 **Адрес:** центральный район\n"
+        f"💰 **Бюджет:** договорная"
+    )
+    photo_url = "https://eurobeton72.ru/upload/iblock/0a5/o2gxw2n35p33h35xr9tfkfrtlzzi4ity.jpg"
+
+    await callback.message.delete()
+    await callback.message.answer_photo(
+        photo=photo_url,
+        caption=caption,
+        reply_markup=task_card_inline_kb,
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
 @dp.callback_query(F.data == "apply")
 async def apply_task(callback: types.CallbackQuery):
     await callback.answer("Ваш отклик отправлен заказчику!", show_alert=True)
 
-# --- ЗАПУСК БОТА ---
+@dp.callback_query(F.data == "back_to_search")
+async def back_to_search(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await callback.message.answer(
+        "📍 Выберите город для поиска актуальных задач:",
+        reply_markup=get_cities_kb("search_city_", include_all=True)
+    )
+    await callback.answer()
+
+# --- ЗАПУСК БОТА (для локальной разработки) ---
 async def main():
     print("Бот запущен и готов к работе!")
     await dp.start_polling(bot)
